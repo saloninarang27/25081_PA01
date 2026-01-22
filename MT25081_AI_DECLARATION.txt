@@ -1,0 +1,15 @@
+I declare that I have used AI assistance in the development of certain components of 
+this assignment. Below is a detailed breakdown of which parts were AI-assisted and 
+which were manually developed.
+
+AI-GENERATED COMPONENTS:
+   AI Assistance Used For:
+   - Scripting logic and system tool integration
+   - Data visualization patterns
+   - Build system configuration
+   - Worker algorithm implementations
+   - Core API understanding (fork/pthread/wait)
+   - Documentation and explanation
+   
+This declaration is made in accordance with course academic integrity policies. 
+I confirm that I understand code and can explain the program's operation in detail during the viva examination.
