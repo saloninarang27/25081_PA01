@@ -1,0 +1,6 @@
+Linux 6.6.87.2-microsoft-standard-WSL2 (Saloni) 	01/22/26 	_x86_64_	(8 CPU)
+
+07:25:47      UID       PID    %usr %system  %guest   %wait    %CPU   CPU  Command
+07:25:48     1000      7654    0.00    0.00    0.00    0.00    0.00     0  progA
+07:25:49     1000      7654    0.00    0.00    0.00    0.00    0.00     0  progA
+

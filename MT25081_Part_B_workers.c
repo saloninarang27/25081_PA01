@@ -9,9 +9,11 @@
  * 2. mem_worker()  - Memory-bound: Large data structure access patterns
  * 3. io_worker()   - I/O-bound: Disk read/write operations
  * 
- * Each worker executes LOOP_COUNT times to create measurable performance
- * characteristics. The loop count is derived my roll no (25081),
- * where LOOP_COUNT = (last_digit) * 10^3 = 1 * 1000 = 1000 iterations.
+ * CPU and Memory workers execute CPU_MEM_LOOP_COUNT times.
+ * I/O worker executes IO_LOOP_COUNT times (reduced for practical benchmarking).
+ *
+ * The CPU_MEM_LOOP_COUNT is derived from roll no (25081),
+ * where CPU_MEM_LOOP_COUNT = (last_digit) * 10^3 = 1 * 1000 = 1000 iterations.
  * ============================================================================
  */
 
@@ -27,9 +29,9 @@ void cpu_worker(void) {
     volatile double pi = 0.0;      // Volatile prevents compiler optimization
     volatile int i;                // Volatile loop counter
     
-    // Outer loop: LOOP_COUNT times (1000 iterations from roll number 25081)
+    // Outer loop: CPU_MEM_LOOP_COUNT times (1000 iterations from roll number 25081)
     // Each iteration completes the inner approximation loop
-    for (int iter = 0; iter < LOOP_COUNT; iter++) {
+    for (int iter = 0; iter < CPU_MEM_LOOP_COUNT; iter++) {
         // Inner loop: 1 million iterations per outer loop iteration
         // Applies formula to approximate PI
         for (i = 0; i < 1000000; i++) {
@@ -64,8 +66,8 @@ void mem_worker(void) {
         return;
     }
     
-    // Repeat LOOP_COUNT times (1000 iterations) to create sustained memory pressure
-    for (int iter = 0; iter < LOOP_COUNT; iter++) {
+    // Repeat CPU_MEM_LOOP_COUNT times (1000 iterations) to create sustained memory pressure
+    for (int iter = 0; iter < CPU_MEM_LOOP_COUNT; iter++) {
         // PHASE 1: Sequential writes to all memory pages
         // Stride of 64 bytes = cache line size (forces memory access, not cache hits)
         // This ensures all allocated memory is physically resident
@@ -97,15 +99,15 @@ void mem_worker(void) {
  */
 void io_worker(void) {
     // Use /tmp for temporary file (usually fast: ramdisk, local disk, or SSD)
-    const char *filename = "/tmp/io_worker_temp_file.txt";
+    const char *filename = "io_worker_temp_file.txt";
     char buffer[4096];              // Standard page size buffer for I/O
     size_t bytes_written;
     
     // Initialize buffer with test data
     memset(buffer, 'A', sizeof(buffer));  // Fill with 'A' characters
     
-    // Main I/O loop: LOOP_COUNT iterations (1000 from roll number 25081)
-    for (int iter = 0; iter < LOOP_COUNT; iter++) {
+    // Main I/O loop: IO_LOOP_COUNT iterations (reduced for practical benchmarking)
+    for (int iter = 0; iter < IO_LOOP_COUNT; iter++) {
         
         // ===== WRITE PHASE =====
         // Open file for writing (truncate if exists)

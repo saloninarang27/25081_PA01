@@ -1,7 +1,7 @@
-Program,Worker_Type,Process_Count,AvgCPU_Percent,AvgMemory_Percent,DiskRead_KB,DiskWrite_KB,ExecutionTime_Sec
-progA,cpu,2,57.71,0.00,0,0,2.96352
-progA,mem,2,67.31,1.67,0,0,15.02379
-progA,io,2,30.17,0.00,0,0,41.51095
-progB,cpu,2,152.75,0.00,0,0,3.36438
-progB,mem,2,188.21,4.74,0,0,14.06570
-progB,io,2,72.13,0.00,0,0,37.26471
+Program+Worker,CPU%,Memory(KB),IO,Time(s)
+progA+cpu,75.00,10368,1.38,4.16
+progA+mem,101.40,420480,1.38,18.87
+progA+io,1.42,10624,1.38,8.27
+progB+cpu,75.00,8960,1.38,4.10
+progB+mem,100.12,418560,1.38,18.92
+progB+io,7.14,9088,1.38,7.71

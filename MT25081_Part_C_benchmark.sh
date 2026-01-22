@@ -22,172 +22,209 @@ NC='\033[0m' # No Color
 # Create necessary directories
 mkdir -p "$LOG_DIR"
 
+# Checks for the presence of required command-line tools.
+# Exits with an error message if any critical tool is missing.
+check_commands() {
+    echo -e "${YELLOW}Checking for required tools...${NC}"
+    local required_commands=("iostat" "top" "taskset" "pgrep" "bc" "nproc")
+    local missing_commands=()
 
-init_csv() {
-    echo "Program,Worker_Type,Process_Count,AvgCPU_Percent,AvgMemory_Percent,DiskRead_KB,DiskWrite_KB,ExecutionTime_Sec" > "$OUTPUT_CSV"
+    for cmd in "${required_commands[@]}"; do
+        if ! command -v "$cmd" &> /dev/null; then
+            missing_commands+=("$cmd")
+        fi
+    done
+
+    if [[ ${#missing_commands[@]} -gt 0 ]]; then
+        echo -e "${RED}ERROR: The following required tools are not installed or not in your PATH:${NC}"
+        for cmd in "${missing_commands[@]}"; do
+            echo -e "${RED}  - $cmd${NC}"
+        done
+        echo ""
+        echo -e "${YELLOW}Please install these tools to continue. Common installation commands:${NC}"
+        echo "  - Debian/Ubuntu: sudo apt-get install procps sysstat util-linux bsdmainutils"
+        echo "  - CentOS/RHEL: sudo yum install procps-ng sysstat util-linux-ng"
+        echo -e "${YELLOW}If you are on Windows using Git Bash, some tools (like taskset, iostat) might require WSL (Windows Subsystem for Linux) or a Linux environment.${NC}"
+        exit 1
+    fi
+    echo -e "${GREEN}All required tools found.${NC}"
+    echo ""
 }
 
+
+
+# Initializes the CSV file with the correct headers for the new data format.
+init_csv() {
+    echo "Program+Worker,CPU%,Memory(KB),IO,Time(s)" > "$OUTPUT_CSV"
+}
+
+# Runs a single benchmark test for a given program, worker, and scale.
 run_benchmark() {
     local program=$1
     local worker=$2
     local count=$3
+    local label=$4
     local program_path="$PROJECT_DIR/$program"
-    
+
     # ====== PHASE 1: VALIDATION ======
     if [[ ! -f "$program_path" ]]; then
         echo -e "${RED}ERROR: $program_path not found${NC}"
         return 1
     fi
-    
-    echo -e "${YELLOW}Running: $program $worker $count${NC}"
-    
+
+    echo -e "${YELLOW}Running: $label+$worker${NC}"
+
     # ====== PHASE 2: CPU PINNING SETUP ======
-    # Build list of CPU cores to pin workload to
-    # Example: count=2 results in cpu_list="0,1"
-    local cpu_list=""
-    local core_count=$count
-    if [[ $core_count -gt $CPU_CORES ]]; then
-        core_count=$CPU_CORES
-    fi
-    
-    for ((i=0; i<core_count; i++)); do
-        if [[ $i -eq 0 ]]; then
-            cpu_list="$i"
-        else
-            cpu_list="$cpu_list,$i"
-        fi
-    done
-    
+    # Pin to a single core '0' to create contention and match the reference benchmark.
+    # This ensures a consistent environment for comparing process vs. thread efficiency.
+    local cpu_list="0"
+
     # ====== PHASE 3: INITIALIZE MONITORING ======
-    # Create temp file for metrics collection
-    local metrics_file="$LOG_DIR/${program}_${worker}_${count}_metrics.txt"
-    rm -f "$metrics_file"
-    
-    # Start background monitoring process
-    (
-        while true; do
-            # Extract CPU% (column 3) and Memory% (column 4) from ps aux
-            # Format: timestamp,cpu_percent,mem_percent
-            ps aux | grep "$program_path" | grep -v grep | \
-                awk -v t="$(date +%s.%N)" '{print t "," $3 "," $4}' >> "$metrics_file"
-            sleep 1  # Sample every 1 second
-        done
-    ) &
-    local monitor_pid=$!
-    
+    # Start background disk I/O monitoring with iostat, sampling every second.
+    # The output is saved to a temporary file for later processing.
+    iostat -dx 1 > "$LOG_DIR/io.tmp" &
+    local io_pid=$!
+
     # ====== PHASE 4: EXECUTE PROGRAM ======
-    # Capture start time with nanosecond precision
-    local start_time=$(date +%s%N)
+    # Use /usr/bin/time to capture wall-clock execution time (%e).
+    # Use taskset to pin the program to the specified CPU core(s).
+    # Stderr is redirected to a temp file to capture the time output.
+    local time_file="$LOG_DIR/time.tmp"
+    /usr/bin/time -f "%e" taskset -c "$cpu_list" "$program_path" "$worker" "$count" 2> "$time_file" &
+    local program_pid=$!
+    echo "DEBUG: Started $program_path ($worker) with PID: $program_pid"
+
+    # Allow a moment for child processes or threads to spawn.
+    sleep 0.4
+
+    # Get the process group ID (pgid) of the main program.
+    # This allows us to monitor all related processes/threads together.
+    local pgid=$(ps -o pgid= "$program_pid" | tr -d ' ')
+    echo "DEBUG: PGID for PID $program_pid is $pgid"
     
-    # Execute program with CPU pinning if taskset available
-    if command -v taskset &> /dev/null; then
-        taskset -c "$cpu_list" "$program_path" "$worker" "$count" > /dev/null 2>&1
-    else
-        "$program_path" "$worker" "$count" > /dev/null 2>&1
-    fi
-    
-    # Capture end time with nanosecond precision
-    local end_time=$(date +%s%N)
-    
-    # ====== PHASE 5: COLLECT METRICS ======
-    # Wait for final samples to be written
-    sleep 1
-    
-    # Kill background monitoring process
-    kill $monitor_pid 2>/dev/null || true
-    wait $monitor_pid 2>/dev/null || true
-    
-    # Calculate execution time in seconds with 5 decimal precision
-    local exec_time=$(awk "BEGIN {printf \"%.5f\", ($end_time - $start_time) / 1000000000}")
-    
-    # ====== PHASE 6: CALCULATE AVERAGES ======
-    # Initialize averages to 0.00
+    # Initialize metric accumulators.
+    local cpu_sum=0
+    local mem_max=0
+    local samples=0
+
+    # Monitor the program's resource usage in a loop while it is running.
+    while kill -0 "$program_pid" 2>/dev/null; do
+        # Get all process IDs (PIDs) belonging to the program's process group.
+        local pids=$(pgrep -g "$pgid" | paste -sd "," -)
+
+        if [[ -n "$pids" ]]; then
+            echo "DEBUG: Monitoring PIDs: $pids"
+            local top_output=$(top -b -n 1 -p "$pids" -w 512)
+            echo "DEBUG: Raw top output for PIDs $pids:"
+            echo "$top_output" # Print raw top output for debugging
+            # Use top in batch mode to get CPU (%CPU) and Resident Memory (RES in KB).
+            # awk sums the values for all PIDs in the process group.
+            read cpu mem <<< $(
+                echo "$top_output" | awk '
+                    NR>7 { cpu+=$9; mem+=$6 }
+                    END   { print cpu+0, mem+0 }
+                '
+            )
+            echo "DEBUG: Parsed CPU: $cpu, Parsed MEM: $mem"
+            
+            # Accumulate CPU usage for averaging later.
+            cpu_sum=$(echo "$cpu_sum + $cpu" | bc)
+            
+            # Track the maximum resident memory usage encountered.
+            if (( $(echo "$mem > $mem_max" | bc -l) )); then
+                mem_max=$mem
+            fi
+            
+            samples=$((samples+1))
+        else
+            echo "DEBUG: No PIDs found in PGID $pgid. Program still running?"
+        fi
+        sleep 1 # Sample every second.
+    done
+    echo "DEBUG: Program with PID $program_pid terminated."
+    # ====== PHASE 5: COLLECT AND PROCESS METRICS ======
+
+    # Stop the background I/O monitoring.
+    kill $io_pid 2>/dev/null || true
+    wait $io_pid 2>/dev/null || true
+
+    # Calculate the average CPU usage across all samples.
     local avg_cpu=0.00
-    local avg_mem=0.00
-    
-    # Only process metrics if file exists and has content
-    if [[ -f "$metrics_file" ]] && [[ -s "$metrics_file" ]]; then
-        # Calculate average CPU% from all samples
-        avg_cpu=$(awk -F',' '{sum+=$2; count++} END {if (count>0) printf "%.2f", sum/count; else print "0.00"}' "$metrics_file")
-        
-        # Calculate average Memory% from all samples
-        avg_mem=$(awk -F',' '{sum+=$3; count++} END {if (count>0) printf "%.2f", sum/count; else print "0.00"}' "$metrics_file")
+    if [[ $samples -gt 0 ]]; then
+        avg_cpu=$(echo "scale=2; $cpu_sum / $samples" | bc)
     fi
-    
-    # Handle empty values (safety check)
-    [[ -z "$avg_cpu" || "$avg_cpu" == "" ]] && avg_cpu="0.00"
-    [[ -z "$avg_mem" || "$avg_mem" == "" ]] && avg_mem="0.00"
-    
-    # ====== PHASE 7: PRINT RESULTS ======
-    echo -e "${GREEN}Completed: $program $worker $count${NC}"
+
+    # Sum the total kilobytes written from the iostat log.
+    # For this iostat version, column 6 is 'kB_wrtn/s'.
+    local total_io=$(grep -v "^Linux" "$LOG_DIR/io.tmp" | awk '{sum+=$6} END {print sum+0}')
+
+    # Read the execution time from the temp file.
+    local exec_time=$(cat "$time_file")
+
+    # ====== PHASE 6: PRINT AND SAVE RESULTS ======
+    echo -e "${GREEN}Completed: $label+$worker${NC}"
     echo "  Avg CPU: ${avg_cpu}%"
-    echo "  Avg Memory: ${avg_mem}%"
+    echo "  Max Memory: ${mem_max} KB"
+    echo "  Total I/O Writes: ${total_io} KB"
     echo "  Execution Time: ${exec_time}s"
     echo ""
-    
-    # ====== PHASE 8: APPEND TO CSV ======
-    # Format: Program,Worker_Type,Process_Count,AvgCPU%,AvgMemory%,DiskRead,DiskWrite,ExecTime
-    echo "$program,$worker,$count,$avg_cpu,$avg_mem,0,0,$exec_time" >> "$OUTPUT_CSV"
-    
+
+    # Append the results to the CSV file in the new, correct format.
+    echo "$label+$worker,$avg_cpu,$mem_max,$total_io,$exec_time" >> "$OUTPUT_CSV"
+
     # ====== CLEANUP ======
-    rm -f "$metrics_file"
+    rm -f "$LOG_DIR/io.tmp" "$LOG_DIR/time.tmp"
 }
 
 main() {
+    # First, check if all required external commands are available.
+    check_commands
+    
     echo -e "${GREEN}"
     echo "╔════════════════════════════════════════════════════════════════════╗"
     echo "║  PA01 PART C: BASELINE BENCHMARKING - PROCESSES VS THREADS         ║"
     echo "║  Roll Number: 25081                                                ║"
-    echo "║  Scale: 2 workers (processes or threads)                           ║"
+    echo "║  Scale: 2 workers (pinned to a single CPU core)                    ║"
     echo "║                                                                    ║"
-    echo "║  Objective: Establish baseline metrics at fixed scale (2)          ║"
-    echo "║             before Part D scaling analysis (2-8)                   ║"
+    echo "║  Objective: Establish baseline metrics with a fixed scale (2)      ║"
+    echo "║             to compare single-core process vs. thread performance. ║"
     echo "╚════════════════════════════════════════════════════════════════════╝"
     echo -e "${NC}"
     echo ""
     
-    # Initialize CSV with headers
+    # Initialize CSV with the correct headers.
     echo -e "${YELLOW}Initializing CSV file: $OUTPUT_CSV${NC}"
     init_csv
     echo -e "${GREEN}CSV initialized with headers${NC}"
     echo ""
     
-    # Verify both programs are compiled
-    if [[ ! -f "$PROJECT_DIR/progA" ]]; then
-        echo -e "${RED}ERROR: progA not found in $PROJECT_DIR${NC}"
-        echo "Please build the programs first with: make"
+    # Verify both programs are compiled.
+    if [[ ! -f "$PROJECT_DIR/progA" || ! -f "$PROJECT_DIR/progB" ]]; then
+        echo -e "${RED}ERROR: progA or progB not found. Build with 'make'${NC}"
         exit 1
     fi
     
-    if [[ ! -f "$PROJECT_DIR/progB" ]]; then
-        echo -e "${RED}ERROR: progB not found in $PROJECT_DIR${NC}"
-        echo "Please build the programs first with: make"
-        exit 1
-    fi
-    
-    # Display system info for context
+    # Display system info for context.
     echo -e "${YELLOW}System Information:${NC}"
     echo "  CPU Cores: $CPU_CORES"
-    echo "  Project Directory: $PROJECT_DIR"
     echo "  Start Time: $(date '+%Y-%m-%d %H:%M:%S')"
     echo ""
     
-    # Run all 6 benchmark combinations
+    # Define programs and workers to be tested.
+    local programs=("progA" "progB")
+    local workers=("cpu" "mem" "io")
+
+    # Run all 6 benchmark combinations.
     echo -e "${YELLOW}Running 6 baseline benchmark combinations...${NC}"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo ""
     
-    # PROGRA BENCHMARKS (fork-based processes)
-    run_benchmark "progA" "cpu" 2 || echo "progA cpu failed"
-    run_benchmark "progA" "mem" 2 || echo "progA mem failed"
-    run_benchmark "progA" "io" 2 || echo "progA io failed"
+    for prog in "${programs[@]}"; do
+        for worker in "${workers[@]}"; do
+            run_benchmark "$prog" "$worker" 2 "$prog" || echo "$prog $worker failed"
+        done
+    done
     
-    # PROGB BENCHMARKS (pthread-based threads)
-    run_benchmark "progB" "cpu" 2 || echo "progB cpu failed"
-    run_benchmark "progB" "mem" 2 || echo "progB mem failed"
-    run_benchmark "progB" "io" 2 || echo "progB io failed"
-    
-    # Print completion message
+    # Print completion message.
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo -e "${GREEN}✓ All baseline benchmarks completed successfully!${NC}"
     echo ""
@@ -198,17 +235,13 @@ main() {
     cat "$OUTPUT_CSV"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo ""
-    echo "Analysis Summary:"
-    echo "  • AvgCPU_Percent: progB typically 15-30% higher (better scheduling)"
-    echo "  • ExecutionTime_Sec: Different for each worker type"
-    echo "  • AvgMemory_Percent: progA memory worker higher (isolated memory)"
-    echo ""
     echo "Next Steps:"
     echo "  1. Run Part D scaling: bash MT25081_Part_D_scaling.sh"
-    echo "  2. Generate plots: python3 generate_plots.py"
-    echo "  3. Compare Part C baseline with Part D scaling results"
+    echo "  2. Update and run generate_plots.py to match the new CSV format"
     echo ""
 }
+
+main "$@"
 
 main "$@"
 

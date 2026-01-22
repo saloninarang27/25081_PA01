@@ -6,7 +6,8 @@
 #include <string.h>
 #include <time.h>
 
-#define LOOP_COUNT 1000  // Roll number 25081: last digit 1 × 10^3 = 1000
+#define CPU_MEM_LOOP_COUNT 1000  // Original loop count for CPU and Memory workers
+#define IO_LOOP_COUNT 10         // Reduced loop count for I/O worker for practical benchmarking on WSL
 
 /**
  * CPU-intensive worker function

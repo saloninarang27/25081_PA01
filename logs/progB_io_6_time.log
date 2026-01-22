@@ -1,0 +1,24 @@
+[progB] Starting 6 threads with worker type: io
+[progB] Thread 1 (TID: 127266392635072) started
+[progB] Thread 2 (TID: 127266384242368) started
+[progB] Thread 4 (TID: 127266367456960) started
+[progB] Main thread waiting for 6 threads to finish...
+[progB] Thread 3 (TID: 127266375849664) started
+[progB] Thread 6 (TID: 127266350671552) started
+[progB] Thread 5 (TID: 127266359064256) started
+[progB] Thread 6 (TID: 127266350671552) completed
+[progB] Thread 1 (TID: 127266392635072) completed
+[progB] Thread 1 joined successfully
+[progB] Thread 5 (TID: 127266359064256) completed
+[progB] Thread 2 (TID: 127266384242368) completed
+Failed to open file for reading
+[progB] Thread 2 joined successfully
+[progB] Thread 4 (TID: 127266367456960) completed
+Failed to open file for reading
+[progB] Thread 3 (TID: 127266375849664) completed
+[progB] Thread 3 joined successfully
+[progB] Thread 4 joined successfully
+[progB] Thread 5 joined successfully
+[progB] Thread 6 joined successfully
+[progB] All 6 threads completed. Main thread exiting.
+97.67
