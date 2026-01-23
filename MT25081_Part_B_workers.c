@@ -1,4 +1,5 @@
 #include "MT25081_Part_B_workers.h"
+#include <unistd.h>
 
 /**
  * 
@@ -127,6 +128,9 @@ void io_worker(void) {
             }
         }
         // Close file to ensure data is flushed to disk
+        fflush(fp);
+        int fd = fileno(fp);
+        fsync(fd);
         fclose(fp);
         
         // ===== READ PHASE =====

@@ -141,8 +141,9 @@ run_scaling_benchmark() {
     fi
 
     # Calculate total I/O writes (in KB) from the iostat log.
-    # Column 6 corresponds to 'kB_wrtn/s' in this version of iostat.
-    local total_io=$(grep -v "^Linux" "$LOG_DIR/io_${program}_${worker}_${scale}.tmp" | awk '{sum+=$6} END {print sum+0}')
+    # Column 9 is 'wkB/s' based on the observed iostat output.
+    # We now filter for specific device prefixes to be more robust.
+    local total_io=$(grep -v "^Linux" "$LOG_DIR/io_${program}_${worker}_${scale}.tmp" | awk '/^(sd|nvme|xvd)/ {sum+=$9} END {print sum+0}')
     # Read execution time.
     local exec_time=$(cat "$time_file")
 
@@ -150,9 +151,10 @@ run_scaling_benchmark() {
     # Append the collected metrics to the main CSV file.
     echo "$program,$worker,$scale,$avg_cpu,$mem_max,$total_io,$exec_time" >> "$OUTPUT_CSV"
     
-    # ====== PHASE 6: CLEANUP ======
+    # ====== CLEANUP ======
     # Remove temporary metric files for this run.
-    rm -f "$LOG_DIR/io_${program}_${worker}_${scale}.tmp" "$LOG_DIR/time_${program}_${worker}_${scale}.tmp"
+    # rm -f "$LOG_DIR/io_${program}_${worker}_${scale}.tmp" # Commented out for debugging
+    rm -f "$LOG_DIR/time_${program}_${worker}_${scale}.tmp"
 }
 
 main() {

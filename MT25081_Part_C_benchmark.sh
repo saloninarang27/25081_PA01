@@ -155,8 +155,9 @@ run_benchmark() {
     fi
 
     # Sum the total kilobytes written from the iostat log.
-    # For this iostat version, column 6 is 'kB_wrtn/s'.
-    local total_io=$(grep -v "^Linux" "$LOG_DIR/io.tmp" | awk '{sum+=$6} END {print sum+0}')
+    # Column 9 is 'wkB/s' based on the observed iostat output.
+    # We now filter for specific device prefixes to be more robust.
+    local total_io=$(grep -v "^Linux" "$LOG_DIR/io.tmp" | awk '/^(sd|nvme|xvd)/ {sum+=$9} END {print sum+0}')
 
     # Read the execution time from the temp file.
     local exec_time=$(cat "$time_file")
@@ -172,8 +173,18 @@ run_benchmark() {
     # Append the results to the CSV file in the new, correct format.
     echo "$label+$worker,$avg_cpu,$mem_max,$total_io,$exec_time" >> "$OUTPUT_CSV"
 
+    # ====== DIAGNOSTIC: PRINT IO.TMP FOR IO WORKER ======
+    # If the worker is 'io', print the raw iostat log to the console for debugging.
+    if [[ "$worker" == "io" ]]; then
+        echo -e "${YELLOW}--- BEGIN IOSTAT LOG (io.tmp for $label) ---${NC}"
+        cat "$LOG_DIR/io.tmp"
+        echo -e "${YELLOW}--- END IOSTAT LOG (io.tmp for $label) ---${NC}"
+        echo ""
+    fi
+
     # ====== CLEANUP ======
-    rm -f "$LOG_DIR/io.tmp" "$LOG_DIR/time.tmp"
+    # rm -f "$LOG_DIR/io.tmp" # Commented out for debugging
+    rm -f "$LOG_DIR/time.tmp"
 }
 
 main() {
